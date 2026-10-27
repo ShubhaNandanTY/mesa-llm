@@ -591,6 +591,28 @@ class LLMAgent(Agent):
 
         return objects
 
+    def _record_event(self, event_type: str, content: Any, **kwargs: Any) -> None:
+        """Record an event for this agent if a recorder is attached.
+
+        The content is deep-copied so later changes to agent state (for example
+        ``internal_state``) don't rewrite already recorded events. Recording is
+        observational: a failure is logged and never interrupts the step.
+        """
+        recorder = self.recorder
+        if recorder is None:
+            return
+        try:
+            recorder.record_event(
+                event_type,
+                content=copy.deepcopy(content),
+                agent_id=self.unique_id,
+                **kwargs,
+            )
+        except Exception:
+            logger.exception(
+                "Recording %s event for agent %s failed.", event_type, self.unique_id
+            )
+
     def _record_successful_action_event(
         self,
         action_choice: ActionChoice,
@@ -890,12 +912,13 @@ class LLMAgent(Agent):
         """
         step = self.model.steps
         self_state, local_state = self._build_observation()
-        await self.memory.aadd_to_memory(
-            type="observation",
-            content={
-                "self_state": self_state,
-                "local_state": local_state,
-            },
+        content = {
+            "self_state": self_state,
+            "local_state": local_state,
+        }
+        await self.memory.aadd_to_memory(type="observation", content=content)
+        self._record_event(
+            "observation", content, metadata={"source": "LLMAgent.generate_obs"}
         )
 
         return Observation(step=step, self_state=self_state, local_state=local_state)
@@ -908,13 +931,14 @@ class LLMAgent(Agent):
         """
         step = self.model.steps
         self_state, local_state = self._build_observation()
+        content = {
+            "self_state": self_state,
+            "local_state": local_state,
+        }
         # Add to memory (memory handles its own display separately)
-        self.memory.add_to_memory(
-            type="observation",
-            content={
-                "self_state": self_state,
-                "local_state": local_state,
-            },
+        self.memory.add_to_memory(type="observation", content=content)
+        self._record_event(
+            "observation", content, metadata={"source": "LLMAgent.generate_obs"}
         )
 
         return Observation(step=step, self_state=self_state, local_state=local_state)
@@ -1006,6 +1030,15 @@ class LLMAgent(Agent):
                 "Sender %s history recording failed after recipient delivery.",
                 self.unique_id,
             )
+
+        # One event per message, on the sender; AgentViewer derives received
+        # messages from recipient_ids.
+        self._record_event(
+            "message",
+            message,
+            recipient_ids=delivered_ids.copy(),
+            metadata={"source": "LLMAgent.send_message"},
+        )
 
         return self._format_message_status(
             message,
@@ -1102,6 +1135,15 @@ class LLMAgent(Agent):
                 "Sender %s history recording failed after recipient delivery.",
                 self.unique_id,
             )
+
+        # One event per message, on the sender; AgentViewer derives received
+        # messages from recipient_ids.
+        self._record_event(
+            "message",
+            message,
+            recipient_ids=delivered_ids.copy(),
+            metadata={"source": "LLMAgent.send_message"},
+        )
 
         return self._format_message_status(
             message,
