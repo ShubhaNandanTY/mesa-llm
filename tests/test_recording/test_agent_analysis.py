@@ -1,9 +1,12 @@
 """Tests for the AgentViewer class and agent analysis functionality."""
 
+import io
 import json
+import re
 from unittest.mock import Mock, patch
 
 import pytest
+from rich.console import Console
 
 from mesa_llm.recording.agent_analysis import AgentViewer, quick_agent_view
 
@@ -354,6 +357,49 @@ class TestAgentViewer:
         assert any(
             "No conversations found" in str(call[0][0]) for call in calls if call[0]
         )
+
+    @staticmethod
+    def _receive_only_viewer(json_path):
+        """Viewer where agent 456 has no events of its own but received a message."""
+        viewer = AgentViewer(str(json_path))
+        viewer.agent_events.pop(456)
+        viewer.agent_summaries.pop("456")
+        output = io.StringIO()
+        viewer.console = Console(file=output, width=200)
+        return viewer, output
+
+    def test_view_agent_conversations_receive_only_agent(self, temp_recording_file):
+        """An agent that only received messages still has a conversation view."""
+        json_path, _ = temp_recording_file
+        viewer, output = self._receive_only_viewer(json_path)
+
+        viewer.view_agent_conversations(456)
+
+        text = output.getvalue()
+        assert "not found" not in text
+        assert "From agent 123: Hello, agent 456!" in text
+
+    def test_view_agent_summary_receive_only_agent(self, temp_recording_file):
+        """The summary of a receive-only agent counts its received messages."""
+        json_path, _ = temp_recording_file
+        viewer, output = self._receive_only_viewer(json_path)
+
+        viewer.view_agent_summary(456)
+
+        text = output.getvalue()
+        assert "not found" not in text
+        assert re.search(r"Messages Received\s*│\s*1\b", text)
+        assert re.search(r"Total Events\s*│\s*0\b", text)
+
+    def test_unknown_agent_is_still_not_found(self, temp_recording_file):
+        """Agents with neither events nor received messages are reported missing."""
+        json_path, _ = temp_recording_file
+        viewer, output = self._receive_only_viewer(json_path)
+
+        viewer.view_agent_conversations(999)
+        viewer.view_agent_summary(999)
+
+        assert output.getvalue().count("Agent 999 not found.") == 2
 
     @patch("mesa_llm.recording.agent_analysis.Console")
     def test_view_agent_decisions(self, mock_console_class, temp_recording_file):

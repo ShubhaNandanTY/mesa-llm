@@ -269,18 +269,9 @@ class AgentViewer:
             )
             self.console.print(panel)
 
-    def view_agent_conversations(self, agent_id):
-        """Show agent conversations."""
-        if agent_id not in self.agent_events:
-            self.console.print(f"Agent {agent_id} not found.", style="red")
-            return
-
-        # Get sent and received messages
-        sent_messages = [
-            e for e in self.agent_events[agent_id] if e["event_type"] == "message"
-        ]
-
-        received_messages = []
+    def _received_messages(self, agent_id):
+        """Return ``(sender_id, event)`` for every message sent to ``agent_id``."""
+        received = []
         for other_id, other_events in self.agent_events.items():
             if other_id == agent_id:
                 continue
@@ -288,7 +279,22 @@ class AgentViewer:
                 if event["event_type"] == "message" and agent_id in event[
                     "content"
                 ].get("recipient_ids", []):
-                    received_messages.append((other_id, event))
+                    received.append((other_id, event))
+        return received
+
+    def view_agent_conversations(self, agent_id):
+        """Show agent conversations."""
+        received_messages = self._received_messages(agent_id)
+        # An agent that only received messages has no events of its own
+        if agent_id not in self.agent_events and not received_messages:
+            self.console.print(f"Agent {agent_id} not found.", style="red")
+            return
+
+        sent_messages = [
+            e
+            for e in self.agent_events.get(agent_id, [])
+            if e["event_type"] == "message"
+        ]
 
         self.console.print(f"\nConversations for Agent {agent_id}", style="bold blue")
 
@@ -357,11 +363,12 @@ class AgentViewer:
 
     def view_agent_summary(self, agent_id):
         """Show agent summary."""
-        if agent_id not in self.agent_events:
+        received_count = len(self._received_messages(agent_id))
+        if agent_id not in self.agent_events and not received_count:
             self.console.print(f"Agent {agent_id} not found.", style="red")
             return
 
-        events = self.agent_events[agent_id]
+        events = self.agent_events.get(agent_id, [])
         self.console.print(f"\nAgent {agent_id} Summary", style="bold blue")
 
         # Check if we have precomputed summary from new recorder format
@@ -399,17 +406,6 @@ class AgentViewer:
         event_counts = defaultdict(int)
         for event in events:
             event_counts[event["event_type"]] += 1
-
-        # Count received messages
-        received_count = 0
-        for other_id, other_events in self.agent_events.items():
-            if other_id == agent_id:
-                continue
-            for event in other_events:
-                if event["event_type"] == "message" and agent_id in event[
-                    "content"
-                ].get("recipient_ids", []):
-                    received_count += 1
 
         # Activity statistics table
         activity_table = Table(title="Activity Statistics")
